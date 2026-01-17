@@ -1,0 +1,46 @@
+{
+  "name": "meme-bot-node",
+  "version": "1.0.0",
+  "description": "meme-stealer [repack by b@ri$ & 6rib@ch]",
+  "license": "ISC",
+  "author": "rundoom & dandyhorse",
+  "lint-staged": {
+    "{src,tests}/**/*.{js,ts}": [
+      "eslint --fix"
+    ]
+  },
+  "scripts": {
+    "build": "eslint . && tsc",
+    "dev": "nodemon --exec ts-node --require tsconfig-paths/register src/index.ts",
+    "start": "node -r tsconfig-paths/register .build/src/index.js",
+    "build-test": "npm run build && npm run test",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.2.0",
+    "@prisma/client": "^7.2.0",
+    "axios": "^1.13.2",
+    "dotenv": "^17.2.3",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-prettier": "^5.5.5",
+    "express": "^5.2.1",
+    "husky": "^9.1.7",
+    "nodemon": "^3.1.11",
+    "pg": "^8.17.1",
+    "prettier": "^3.8.0",
+    "redis": "^5.10.0",
+    "telegram": "^2.26.22",
+    "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.53.0",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.9",
+    "@types/pg": "^8.16.0",
+    "prisma": "^7.2.0"
+  }
+}

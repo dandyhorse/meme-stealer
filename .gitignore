@@ -1,0 +1,34 @@
+############################
+# Logs and databases
+############################
+
+logs
+*.log
+
+
+############################
+# Node.js
+############################
+
+lib-cov
+lcov.info
+pids
+
+############################
+# Misc.
+############################
+
+/sources
+/outputs*
+/results
+/node_modules
+.node_history
+.build
+.env
+*.pem
+.idea
+backup
+generated
+firefox
+
+/generated/prisma
