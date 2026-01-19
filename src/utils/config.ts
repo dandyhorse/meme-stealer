@@ -4,6 +4,8 @@ import { StringSession } from 'telegram/sessions';
 
 dotenv.config();
 
+const dbUrl = process.env.DB_URL;
+
 const apiId = Number(process.env.API_ID);
 const apiHash = process.env.API_HASH;
 const chatId = process.env.CHAT_ID;
@@ -16,4 +18,4 @@ const tgClient = new TelegramClient(stringSession, apiId, apiHash, {
   connectionRetries: 5,
 });
 
-export { tgClient, chatId, botToken };
+export { dbUrl, tgClient, chatId, botToken };

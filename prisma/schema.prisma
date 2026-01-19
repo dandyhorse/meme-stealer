@@ -1,9 +1,72 @@
 generator client {
-  provider = "prisma-client-js"
-  output   = "../generated/client"
+  provider   = "prisma-client-js"
+  output     = "../generated/client"
+  engineType = "client" // enable Prisma ORM without Rust
 }
+
+// generator client {
+//   provider   = "prisma-client" // or `prisma-client-js`
+//   output     = "../generated/prisma"
+//   engineType = "client" // enable Prisma ORM without Rust
+// }
 
 datasource db {
   provider = "postgres"
-  // url      = env("DB_URL")
+}
+
+enum ChatState {
+  NONE
+  FAVORITE
+  BANNED
+}
+
+model Chat {
+  id        Int       @id @default(autoincrement())
+  chatId    BigInt    @unique
+  title     String
+  state     ChatState @default(NONE)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Связь с Minithumbnail через промежуточную таблицу                                                                                              
+  minithumbnails MinithumbnailSource[]
+
+  @@index([state])
+  @@map("chats")
+}
+
+model Minithumbnail {
+  id                     Int      @id @default(autoincrement())
+  md5                    String   @unique @db.Char(32)
+  isPostedToFilteredChat Boolean  @default(false)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  // Каналы-источники этого контента                                                                                                                
+  channelsFrom MinithumbnailSource[]
+
+  @@index([isPostedToFilteredChat])
+  @@map("minithumbnails")
+}
+
+// Связующая таблица: из каких каналов пришёл контент                                                                                               
+model MinithumbnailSource {
+  id              Int           @id @default(autoincrement())
+  minithumbnail   Minithumbnail @relation(fields: [minithumbnailId], references: [id], onDelete: Cascade)
+  minithumbnailId Int
+  chat            Chat          @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId          Int
+  addedAt         DateTime      @default(now())
+
+  @@unique([minithumbnailId, chatId])
+  @@index([chatId])
+  @@map("minithumbnail_sources")
+}
+
+model Sticker {
+  id        Int      @id @default(autoincrement())
+  setId     BigInt   @unique
+  createdAt DateTime @default(now())
+
+  @@map("stickers")
 }
