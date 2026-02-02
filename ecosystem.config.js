@@ -1,14 +1,14 @@
 module.exports = {
   apps: [
     {
-      name: 'boosty',
+      name: 'meme-stealer',
       script: 'node',
-      args: '-r tsconfig-paths/register .build/src/server.js',
+      args: '-r tsconfig-paths/register .build/src/index.js',
       cwd: './',
       instances: 1,
       autorestart: true,
       watch: false,
-      max_memory_restart: '4G',
+      max_memory_restart: '1G',
     },
   ],
 };

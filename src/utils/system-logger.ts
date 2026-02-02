@@ -33,22 +33,42 @@ const makePrefix = ({ timestamp, level, path, statusCode, message }: BaseLogDto)
   return additional.length > 0 ? `${prefix}: ${additional.join(' ')}` : `${prefix}:`;
 };
 
-const prepareDetails = (details?: any) => {
+const serializeError = (err: unknown): object => {
+  if (err instanceof Error) {
+    return {
+      name: err.name,
+      message: err.message,
+      stack: err.stack,
+    };
+  }
+  return { value: err };
+};
+
+const prepareDetails = (details?: unknown) => {
   let logDetails = '';
 
   if (details) {
-    if (details.error && axios.isAxiosError(details.error)) {
-      const { error } = details;
+    // Если details сам является Error
+    if (details instanceof Error) {
+      logDetails = ` ${JSON.stringify({ details: serializeError(details) })}`;
+    }
+    // Если details — объект с полем error (axios или другой)
+    else if (typeof details === 'object' && details !== null && 'error' in details) {
+      const detailsObj = details as Record<string, unknown>;
 
-      const errorDetails = {
-        status: error.response.status,
-        data: error.response.data,
-        headers: error.response.headers,
-      };
-
-      delete details.error;
-
-      logDetails = ` ${JSON.stringify({ errorDetails, details })}`;
+      if (axios.isAxiosError(detailsObj.error)) {
+        const error = detailsObj.error;
+        const errorDetails = {
+          status: error.response?.status,
+          data: error.response?.data,
+          headers: error.response?.headers,
+        };
+        delete detailsObj.error;
+        logDetails = ` ${JSON.stringify({ errorDetails, details: detailsObj })}`;
+      } else {
+        detailsObj.error = serializeError(detailsObj.error);
+        logDetails = ` ${JSON.stringify({ details: detailsObj })}`;
+      }
     } else {
       logDetails = ` ${JSON.stringify({ details })}`;
     }

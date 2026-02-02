@@ -1,0 +1,131 @@
+import { tgClient } from '@config';
+import { Api } from 'telegram';
+
+import { getFavoriteChats, updateLastMessageId } from './src/modules/db';
+import { LogLevel } from './src/utils/common/dtos';
+import { systemLogger } from './src/utils/system-logger';
+
+const PROXY_CHAT_ID = -1003518762032;
+const POLL_INTERVAL = 30000;
+
+const hasUrl = (message: Api.Message): boolean => {
+  if (message.message && /https?:\/\//.test(message.message)) {
+    return true;
+  }
+
+  if (message.replyMarkup && 'rows' in message.replyMarkup) {
+    for (const row of message.replyMarkup.rows) {
+      for (const button of row.buttons) {
+        if ('url' in button && button.url) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+};
+
+const processMessage = async (
+  message: Api.Message,
+  sourceChatId: bigint,
+  channelTitle: string,
+): Promise<void> => {
+  // Реклама — пропускаем
+  if (hasUrl(message)) {
+    systemLogger.log({
+      level: LogLevel.LOG,
+      module: 'PROCESS',
+      message: `[${channelTitle}] ${message.id} — пропущен (реклама)`,
+    });
+    return;
+  }
+
+  await tgClient.forwardMessages(PROXY_CHAT_ID, {
+    fromPeer: String(sourceChatId),
+    messages: [message.id],
+  });
+  systemLogger.log({
+    level: LogLevel.LOG,
+    module: 'PROCESS',
+    message: `[${channelTitle}] ${message.id} → proxy`,
+  });
+};
+
+const pollMessages = async () => {
+  systemLogger.log({
+    level: LogLevel.LOG,
+    module: 'POLLING',
+    message: 'Начинаем забирать сообщения ...',
+  });
+
+  const channels = await getFavoriteChats();
+
+  for (const channel of channels) {
+    const { chatId, title } = channel;
+
+    systemLogger.log({
+      level: LogLevel.LOG,
+      module: 'POLLING',
+      message: `Проверяю канал: ${title}`,
+    });
+
+    try {
+      const messages = await tgClient.getMessages(String(chatId), { limit: 100 });
+      const lastSeen = channel.lastMessageId;
+
+      if (messages.length > 0) {
+        const newestMessageId = messages[0].id;
+        const newMessages = messages.filter((m) => m.id > lastSeen);
+
+        if (newMessages.length > 0) {
+          systemLogger.log({
+            level: LogLevel.LOG,
+            module: 'POLLING',
+            message: `[${title}] Новых сообщений: ${newMessages.length}`,
+          });
+
+          for (const message of newMessages) {
+            try {
+              await processMessage(message, chatId, title);
+            } catch (err) {
+              systemLogger.log({
+                level: LogLevel.ERROR,
+                module: 'PROCESS',
+                message: `[${title}] Ошибка обработки сообщения ${message.id}`,
+                details: err,
+              });
+            }
+          }
+        }
+
+        if (newestMessageId > lastSeen) {
+          await updateLastMessageId(chatId, newestMessageId);
+        }
+      }
+    } catch (error) {
+      systemLogger.log({
+        level: LogLevel.ERROR,
+        module: 'POLLING',
+        message: `Ошибка polling для ${title} (${chatId})`,
+        details: error,
+      });
+    }
+  }
+};
+
+const main = async () => {
+  systemLogger.log({
+    level: LogLevel.INFO,
+    module: 'TGCLIENT',
+    message: 'meme',
+  });
+
+  await tgClient.connect();
+
+  setInterval(pollMessages, POLL_INTERVAL);
+};
+
+(async () => {
+  await main();
+})();

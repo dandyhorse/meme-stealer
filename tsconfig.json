@@ -9,14 +9,26 @@
     "target": "es6",
     "outDir": ".build",
     "moduleResolution": "node",
-    "typeRoots": ["node_modules/@types/"],
+    "typeRoots": [
+      "node_modules/@types/"
+    ],
     "noEmitOnError": true,
-    "lib": ["es2015", "dom"],
+    "lib": [
+      "es2015",
+      "dom"
+    ],
     "rootDir": "./",
     "skipLibCheck": true,
-    "baseUrl": "./"
+    "baseUrl": "./",
+    "paths": {
+      "@config": [
+        "./src/utils/config.ts"
+      ]
+    },
   },
-  "include": ["./"],
+  "include": [
+    "./"
+  ],
   "exclude": [
     "node_modules/",
     "build/",

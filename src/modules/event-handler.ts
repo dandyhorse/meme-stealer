@@ -1,27 +1,21 @@
 import crypto from 'crypto';
 
-import { tgClient } from '@config';
 import { Api } from 'telegram';
+import { NewMessage, NewMessageEvent } from 'telegram/events';
 
-import { getFavoriteChats, checkAndTrackMinithumbnail, updateLastMessageId } from './modules/db';
-// import { handleNewMessage, NewMessage } from './modules/event-handler';
-import { LogLevel } from './utils/common/dtos';
-import { systemLogger } from './utils/system-logger';
-
-// Event handler (опционально - можно исключить из сборки)
+import { checkAndTrackMinithumbnail, updateLastMessageId } from './db';
+import { LogLevel } from '../utils/common/dtos';
+import { systemLogger } from '../utils/system-logger';
 
 const PROXY_CHAT_ID = -1003518762032;
 const FILTERED_CHAT_ID = -1003722286620;
-const POLL_INTERVAL = 60000;
 
 const hasUrl = (message: Api.Message): boolean => {
-  // Проверяем текст сообщения (message.message или message.text)
   const text = message.message || message.text;
   if (text && /https?:\/\//.test(text)) {
     return true;
   }
 
-  // Проверяем entities — Telegram помечает URL через сущности
   if (message.entities) {
     for (const entity of message.entities) {
       if (entity.className === 'MessageEntityUrl' || entity.className === 'MessageEntityTextUrl') {
@@ -30,7 +24,6 @@ const hasUrl = (message: Api.Message): boolean => {
     }
   }
 
-  // Проверяем кнопки с URL
   if (message.replyMarkup && 'rows' in message.replyMarkup) {
     for (const row of message.replyMarkup.rows) {
       for (const button of row.buttons) {
@@ -54,17 +47,14 @@ const extractThumbnailBytes = (message: Api.Message): Buffer | null => {
 
   let thumbs: Api.TypePhotoSize[] | undefined;
 
-  // MessageMediaDocument (video, gif, animation)
   if ('document' in media && media.document && 'thumbs' in media.document) {
     thumbs = media.document.thumbs;
   }
 
-  // MessageMediaPhoto
   if ('photo' in media && media.photo && 'sizes' in media.photo) {
     thumbs = media.photo.sizes;
   }
 
-  // MessageMediaStory — вложенная структура: story.media.photo/document
   if ('story' in media && media.story && 'media' in media.story) {
     const storyMedia = media.story.media;
     if (storyMedia && 'photo' in storyMedia && storyMedia.photo && 'sizes' in storyMedia.photo) {
@@ -100,6 +90,7 @@ const computeMd5 = (data: Buffer): string => {
 const forwardToFiltered = async (message: Api.Message, sourceChatId: bigint, reason: string) => {
   if (!FILTERED_CHAT_ID) return;
 
+  const { tgClient } = await import('@config');
   await tgClient.forwardMessages(FILTERED_CHAT_ID, {
     fromPeer: String(sourceChatId),
     messages: [message.id],
@@ -116,13 +107,11 @@ const processMessage = async (
   sourceChatId: bigint,
   channelTitle: string,
 ): Promise<void> => {
-  // Нет медиа — в filtered
   if (!message.media) {
     await forwardToFiltered(message, sourceChatId, `[${channelTitle}] нет медиа`);
     return;
   }
 
-  // Реклама — в filtered
   if (hasUrl(message)) {
     await forwardToFiltered(message, sourceChatId, `[${channelTitle}] реклама/URL`);
     return;
@@ -130,9 +119,9 @@ const processMessage = async (
 
   const thumbnailBytes = extractThumbnailBytes(message);
 
-  // Нет thumbnail — пересылаем без дедупликации
   if (!thumbnailBytes) {
     const mediaType = getMediaType(message.media);
+    const { tgClient } = await import('@config');
     await tgClient.forwardMessages(PROXY_CHAT_ID, {
       fromPeer: String(sourceChatId),
       messages: [message.id],
@@ -151,6 +140,7 @@ const processMessage = async (
   const result = await checkAndTrackMinithumbnail(md5, sourceChatId);
 
   if (result.isNew) {
+    const { tgClient } = await import('@config');
     await tgClient.forwardMessages(PROXY_CHAT_ID, {
       fromPeer: String(sourceChatId),
       messages: [message.id],
@@ -166,94 +156,44 @@ const processMessage = async (
   }
 };
 
-const pollMessages = async () => {
-  systemLogger.log({
-    level: LogLevel.LOG,
-    module: 'POLLING',
-    message: 'Начинаем забирать сообщения ...',
-  });
+export const handleNewMessage = async (event: NewMessageEvent) => {
+  const message = event.message;
 
-  const channels = await getFavoriteChats();
+  let rawChatId = event.chatId ?? message.chatId;
 
-  for (const channel of channels) {
-    const { chatId, title } = channel;
-
-    // systemLogger.log({
-    //   level: LogLevel.LOG,
-    //   module: 'POLLING',
-    //   message: `Проверяю канал: ${title}`,
-    // });
-
-    try {
-      const messages = await tgClient.getMessages(String(chatId), { limit: 100 });
-      const lastSeen = channel.lastMessageId;
-
-      if (messages.length > 0) {
-        const newestMessageId = messages[0].id;
-        // const earliestMessageId = messages[messages.length - 1].id;
-
-        // systemLogger.log({
-        //   level: LogLevel.DEBUG,
-        //   module: 'POLLING',
-        //   message: `[DEBUG ${title}] lastSeen: ${lastSeen} (${typeof lastSeen}), newestMessageId: ${newestMessageId} (${typeof newestMessageId}, earliestMessageId: ${earliestMessageId})`,
-        // });
-
-        const newMessages = messages.filter((m) => m.id > lastSeen);
-
-        if (newMessages.length > 0) {
-          systemLogger.log({
-            level: LogLevel.LOG,
-            module: 'POLLING',
-            message: `[${title}] Новых сообщений: ${newMessages.length}`,
-          });
-        }
-
-        for (const message of newMessages) {
-          try {
-            await processMessage(message, chatId, title);
-          } catch (err) {
-            systemLogger.log({
-              level: LogLevel.ERROR,
-              module: 'PROCESS',
-              message: `[${title}] Ошибка обработки сообщения ${message.id}`,
-              details: err,
-            });
-          }
-        }
-
-        if (newestMessageId > lastSeen) {
-          await updateLastMessageId(chatId, newestMessageId);
-        }
-      }
-    } catch (error) {
-      systemLogger.log({
-        level: LogLevel.ERROR,
-        module: 'POLLING',
-        message: `Ошибка polling для ${title} (${chatId})`,
-        details: error,
-      });
+  if (!rawChatId && message.peerId) {
+    if ('channelId' in message.peerId) {
+      rawChatId = message.peerId.channelId;
+    } else if ('chatId' in message.peerId) {
+      rawChatId = message.peerId.chatId;
+    } else if ('userId' in message.peerId) {
+      rawChatId = message.peerId.userId;
     }
   }
-};
 
-// SLEEPERS
-export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  if (!rawChatId) {
+    systemLogger.log({
+      level: LogLevel.WARN,
+      module: 'EVENT',
+      message: `Не удалось получить chatId из события`,
+      details: { messageId: message.id, peerId: message.peerId },
+    });
+    return;
+  }
 
-const main = async () => {
-  systemLogger.log({
-    level: LogLevel.INFO,
-    module: 'TGCLIENT',
-    message: 'meme',
-  });
+  const cleanChatId = BigInt(String(rawChatId).replace(/\n/g, ''));
 
-  await tgClient.connect();
-
-  while (true) {
-    await pollMessages();
-    await sleep(POLL_INTERVAL);
+  try {
+    await processMessage(message, cleanChatId, 'TEST');
+    await updateLastMessageId(cleanChatId, message.id);
+  } catch (err) {
+    systemLogger.log({
+      level: LogLevel.ERROR,
+      module: 'EVENT',
+      message: `Ошибка обработки сообщения ${message.id} `,
+      details: err,
+    });
   }
 };
 
-(async () => {
-  await main();
-})();
+export { NewMessage };

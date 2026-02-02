@@ -14,7 +14,8 @@
     "dev": "nodemon --exec ts-node --require tsconfig-paths/register src/index.ts",
     "start": "node -r tsconfig-paths/register .build/src/index.js",
     "build-test": "npm run build && npm run test",
-    "prepare": "husky"
+    "prepare": "husky",
+    "db:seed": "ts-node --require tsconfig-paths/register prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.2.0",
