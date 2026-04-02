@@ -1,10 +1,10 @@
-import crypto from 'crypto';
-
 import { Api } from 'telegram';
 import { NewMessage, NewMessageEvent } from 'telegram/events';
 
-import { checkAndTrackMinithumbnail, updateLastMessageId } from './db';
+import { checkContentHash, getOriginalSource, trackContentHash } from './content-hash-db';
+import { updateLastMessageId } from './db';
 import { LogLevel } from '../utils/common/dtos';
+import { safeComputeHash } from '../utils/phash';
 import { systemLogger } from '../utils/system-logger';
 
 const PROXY_CHAT_ID = -1003518762032;
@@ -41,52 +41,6 @@ const getMediaType = (media: Api.TypeMessageMedia): string => {
   return media.className || 'Unknown';
 };
 
-const extractThumbnailBytes = (message: Api.Message): Buffer | null => {
-  const media = message.media;
-  if (!media) return null;
-
-  let thumbs: Api.TypePhotoSize[] | undefined;
-
-  if ('document' in media && media.document && 'thumbs' in media.document) {
-    thumbs = media.document.thumbs;
-  }
-
-  if ('photo' in media && media.photo && 'sizes' in media.photo) {
-    thumbs = media.photo.sizes;
-  }
-
-  if ('story' in media && media.story && 'media' in media.story) {
-    const storyMedia = media.story.media;
-    if (storyMedia && 'photo' in storyMedia && storyMedia.photo && 'sizes' in storyMedia.photo) {
-      thumbs = storyMedia.photo.sizes;
-    }
-    if (
-      storyMedia &&
-      'document' in storyMedia &&
-      storyMedia.document &&
-      'thumbs' in storyMedia.document
-    ) {
-      thumbs = storyMedia.document.thumbs;
-    }
-  }
-
-  if (!thumbs) return null;
-
-  const stripped = thumbs.find(
-    (t): t is Api.PhotoStrippedSize => 'type' in t && t.type === 'i' && 'bytes' in t,
-  );
-
-  if (stripped && stripped.bytes) {
-    return Buffer.from(stripped.bytes);
-  }
-
-  return null;
-};
-
-const computeMd5 = (data: Buffer): string => {
-  return crypto.createHash('md5').update(data).digest('hex');
-};
-
 const forwardToFiltered = async (message: Api.Message, sourceChatId: bigint, reason: string) => {
   if (!FILTERED_CHAT_ID) return;
 
@@ -117,11 +71,11 @@ const processMessage = async (
     return;
   }
 
-  const thumbnailBytes = extractThumbnailBytes(message);
+  const { tgClient } = await import('@config');
+  const hash = await safeComputeHash(message, tgClient);
 
-  if (!thumbnailBytes) {
+  if (!hash) {
     const mediaType = getMediaType(message.media);
-    const { tgClient } = await import('@config');
     await tgClient.forwardMessages(PROXY_CHAT_ID, {
       fromPeer: String(sourceChatId),
       messages: [message.id],
@@ -136,15 +90,14 @@ const processMessage = async (
     return;
   }
 
-  const md5 = computeMd5(thumbnailBytes);
-  const result = await checkAndTrackMinithumbnail(md5, sourceChatId);
+  const result = await checkContentHash(hash);
 
   if (result.isNew) {
-    const { tgClient } = await import('@config');
     await tgClient.forwardMessages(PROXY_CHAT_ID, {
       fromPeer: String(sourceChatId),
       messages: [message.id],
     });
+    await trackContentHash(hash, sourceChatId, message.id, sourceChatId);
 
     systemLogger.log({
       level: LogLevel.LOG,
@@ -152,7 +105,35 @@ const processMessage = async (
       message: `[${channelTitle}] ${message.id} → proxy (новый)`,
     });
   } else {
+    try {
+      const original = await getOriginalSource(result.existing!.id);
+      if (original && original.messageId && original.sourceChatId) {
+        await tgClient.sendMessage(FILTERED_CHAT_ID, {
+          message: `📌 ОРИГИНАЛ | distance: ${result.existing!.distance} | chat: ${original.sourceChatId} | msg: ${original.messageId}`,
+        });
+        await tgClient.forwardMessages(FILTERED_CHAT_ID, {
+          fromPeer: String(original.sourceChatId),
+          messages: [original.messageId],
+        });
+      } else {
+        await tgClient.sendMessage(FILTERED_CHAT_ID, {
+          message: `📌 ОРИГИНАЛ не найден (старая запись) | distance: ${result.existing!.distance}`,
+        });
+      }
+    } catch (err) {
+      systemLogger.log({
+        level: LogLevel.WARN,
+        module: 'DEDUP',
+        message: `Не удалось переслать оригинал для hashId=${result.existing!.id}`,
+        details: err,
+      });
+    }
+
+    await tgClient.sendMessage(FILTERED_CHAT_ID, {
+      message: `🔁 ДУБЛЬ | [${channelTitle}] | msg: ${message.id}`,
+    });
     await forwardToFiltered(message, sourceChatId, `[${channelTitle}] дубликат`);
+    await trackContentHash(hash, sourceChatId, message.id, sourceChatId, result.existing!.id);
   }
 };
 
