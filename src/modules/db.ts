@@ -1,11 +1,10 @@
-import { ChatState } from '../../generated/client';
 import { db } from '../../prisma/client';
 
 // ============ CHATS ============
 
-export const getFavoriteChats = async () => {
+export const getActiveChats = async () => {
   return db.chat.findMany({
-    where: { state: ChatState.FAVORITE },
+    where: { isActive: true },
   });
 };
 
@@ -15,15 +14,11 @@ export const findChatByChatId = async (chatId: bigint) => {
   });
 };
 
-export const upsertChat = async (
-  chatId: bigint,
-  title: string,
-  state: ChatState = ChatState.FAVORITE,
-) => {
+export const upsertChat = async (chatId: bigint, title: string, isActive: boolean = true) => {
   return db.chat.upsert({
     where: { chatId },
     update: { title },
-    create: { chatId, title, state },
+    create: { chatId, title, isActive },
   });
 };
 

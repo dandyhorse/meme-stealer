@@ -1,0 +1,1 @@
+- [No logger in config.ts](feedback_no_logger_in_config.md) — circular dep: never import systemLogger in config.ts

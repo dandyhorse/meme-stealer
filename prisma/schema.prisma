@@ -1,32 +1,40 @@
 generator client {
-  provider   = "prisma-client-js"
-  output     = "../generated/client"
-  engineType = "client" // enable Prisma ORM without Rust
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+  // engineType = "client" // enable Prisma ORM without Rust
 }
 
 datasource db {
   provider = "postgres"
 }
 
-enum ChatState {
-  NONE
-  FAVORITE
-  BANNED
+enum AdminRole {
+  admin
+  full_access
+}
+
+model Admin {
+  id         Int       @id @default(autoincrement())
+  telegramId BigInt    @unique @map("telegram_id")
+  role       AdminRole @default(admin)
+  name       String?
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@map("admins")
 }
 
 model Chat {
-  id            Int       @id @default(autoincrement())
-  chatId        BigInt    @unique
+  id            Int      @id @default(autoincrement())
+  chatId        BigInt   @unique
   title         String
-  state         ChatState @default(NONE)
-  lastMessageId Int       @default(0)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  isActive      Boolean  @default(true) @map("is_active")
+  lastMessageId Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  // Связь с Minithumbnail через промежуточную таблицу
   minithumbnails MinithumbnailSource[]
 
-  @@index([state])
+  @@index([isActive])
   @@map("chats")
 }
 
