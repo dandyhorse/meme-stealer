@@ -2,10 +2,12 @@ import axios from 'axios';
 
 import { BaseLogDto, FinishLogDto, LogDto, LogLevel } from './common/dtos';
 
+// ANSI escape codes for colored console output (red for errors, green for success, yellow for info/warn)
 const makeRed = (message: string) => `\x1b[31m${message}\x1b[0m`;
 const makeGreen = (message: string) => `\x1b[32m${message}\x1b[0m`;
 const makeYellow = (message: string) => `\x1b[33m${message}\x1b[0m`;
 
+// Formats a timestamp into a readable string (DD.MM.YYYY HH:MM:SS) in Moscow timezone
 const formatTS = (timestamp: number) =>
   Intl.DateTimeFormat('ru-RU', {
     timeZone: 'Europe/Moscow',
@@ -21,6 +23,7 @@ const formatTS = (timestamp: number) =>
     .replace(/\//g, '.')
     .replace(',', '');
 
+// Builds the standard log prefix: [timestamp] [LEVEL] [module] (statusCode) message
 const makePrefix = ({ timestamp, level, path, statusCode, message }: BaseLogDto) => {
   const prefix = `[${formatTS(timestamp)}] [${level.toUpperCase()}]`;
 
@@ -33,6 +36,7 @@ const makePrefix = ({ timestamp, level, path, statusCode, message }: BaseLogDto)
   return additional.length > 0 ? `${prefix}: ${additional.join(' ')}` : `${prefix}:`;
 };
 
+// Converts an Error object into a plain object for safe JSON serialization
 const serializeError = (err: unknown): object => {
   if (err instanceof Error) {
     return {
@@ -44,6 +48,8 @@ const serializeError = (err: unknown): object => {
   return { value: err };
 };
 
+// Prepares the details portion of a log entry.
+// Handles plain objects, Error instances, and Axios errors specially to extract useful info.
 const prepareDetails = (details?: unknown) => {
   let logDetails = '';
 
@@ -77,6 +83,7 @@ const prepareDetails = (details?: unknown) => {
   return logDetails;
 };
 
+// Main logging function. Formats the message, applies color based on log level, and prints to console.
 const log = ({ level, module, message, details }: LogDto) => {
   const logPrefix = makePrefix({ timestamp: Date.now(), level, path: module, message });
   const logDetails = prepareDetails(details);
@@ -100,6 +107,8 @@ const log = ({ level, module, message, details }: LogDto) => {
   console[level](logMessage);
 };
 
+// Logs the completion of an HTTP request (typically used with Express middleware).
+// Includes request time, body, and any errors that occurred.
 const finishLog = ({ res, req, error }: FinishLogDto) => {
   const level: LogLevel = error ? LogLevel.ERROR : LogLevel.LOG;
 
@@ -131,6 +140,7 @@ const finishLog = ({ res, req, error }: FinishLogDto) => {
   console[level](message);
 };
 
+// Exported logger interface containing the main logging methods
 export const systemLogger = {
   finishLog,
   log,

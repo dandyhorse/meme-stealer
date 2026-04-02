@@ -9,6 +9,9 @@ import { getActiveChannels, addChannel, deactivateChannel } from '../services/ch
 import { LogLevel } from '../utils/common/dtos/index';
 import { systemLogger } from '../utils/system-logger';
 
+// Defines the structure for a bot command.
+// Each command has a name (e.g. '/channels'), a description for help text,
+// an optional full_access requirement, and an async handler that returns a response string.
 export interface BotCommand {
   name: string;
   description: string;
@@ -16,6 +19,8 @@ export interface BotCommand {
   handler: (args: string[], ctx?: Context) => Promise<string>;
 }
 
+// Lists all active channels currently being polled for memes.
+// Returns a formatted string with each channel's ID and title.
 export const listChannelsCommand: BotCommand = {
   name: '/channels',
   description: 'Показать каналы в полинге (id + title)',
@@ -37,6 +42,10 @@ export const listChannelsCommand: BotCommand = {
   },
 };
 
+// Adds a new channel to the polling list.
+// Accepts either a Telegram link (t.me/...) or a numeric chat ID.
+// Resolves the input to a channel, joins it via the userbot, and creates a DB record.
+// If the channel was previously deactivated, it gets reactivated.
 export const addChannelCommand: BotCommand = {
   name: '/add',
   description: 'Добавить канал. Формат: /add <ссылка или id>',
@@ -101,6 +110,9 @@ export const addChannelCommand: BotCommand = {
   },
 };
 
+// Deactivates a channel so it's no longer polled.
+// Does NOT leave the channel — just marks it as inactive in the database.
+// Accepts a numeric ID or a link (which gets resolved to an ID).
 export const removeChannelCommand: BotCommand = {
   name: '/remove',
   description: 'Деактивировать канал. Формат: /remove <ссылка или id>',
@@ -139,6 +151,9 @@ export const removeChannelCommand: BotCommand = {
   },
 };
 
+// Lists ALL channels and groups the userbot account is a member of.
+// Requires full_access admin role.
+// Converts raw Telegram channel IDs to Bot API format (-100 prefix) for compatibility.
 export const allChannelsCommand: BotCommand = {
   name: '/allChannels',
   description: 'Показать все каналы на аккаунте',
@@ -175,6 +190,9 @@ export const allChannelsCommand: BotCommand = {
   },
 };
 
+// Lists all private (user-to-user) chats the userbot has interacted with.
+// Excludes bots and the user's own account.
+// Requires full_access admin role.
 export const privateChatsCommand: BotCommand = {
   name: '/privateChats',
   description: 'Показать личные чаты аккаунта (user ID + имя)',
@@ -210,6 +228,9 @@ export const privateChatsCommand: BotCommand = {
   },
 };
 
+// Adds a new admin to the database with a specified role (admin or full_access).
+// Requires full_access to execute.
+// Reloads the in-memory admin cache after adding.
 export const addAdminCommand: BotCommand = {
   name: '/addAdmin',
   description: 'Добавить админа. Формат: /addAdmin <admin|full_access> <telegram_id>',
@@ -239,6 +260,9 @@ export const addAdminCommand: BotCommand = {
   },
 };
 
+// Removes an admin from the database by their Telegram user ID.
+// Requires full_access to execute.
+// Reloads the in-memory admin cache after removal.
 export const removeAdminCommand: BotCommand = {
   name: '/removeAdmin',
   description: 'Удалить админа. Формат: /removeAdmin <telegram_id>',
@@ -253,6 +277,8 @@ export const removeAdminCommand: BotCommand = {
   },
 };
 
+// Displays a help message listing available commands.
+// Dynamically shows full_access commands only if the requesting user has that role.
 export const helpCommand: BotCommand = {
   name: '/help',
   description: 'Показать справку по командам',
@@ -277,6 +303,8 @@ export const helpCommand: BotCommand = {
   },
 };
 
+// Registry of all available bot commands.
+// The executeCommand function searches this array to route incoming commands.
 export const allCommands: BotCommand[] = [
   listChannelsCommand,
   allChannelsCommand,
@@ -288,6 +316,10 @@ export const allCommands: BotCommand[] = [
   helpCommand,
 ];
 
+// Routes an incoming command string to the appropriate handler.
+// Splits the input into command name and arguments, finds the matching command,
+// checks access permissions, and executes the handler.
+// Returns the handler's response string or an error message.
 export const executeCommand = async (commandText: string, ctx?: Context): Promise<string> => {
   const [command, ...args] = commandText.trim().split(' ');
   const cmd = allCommands.find((c) => c.name === command);

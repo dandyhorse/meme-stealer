@@ -1,18 +1,25 @@
+// Prisma schema for meme-stealer database.
+// Defines the data models for tracking watched channels, deduplicated content, and admin users.
+
 generator client {
   provider = "prisma-client-js"
   output   = "../generated/client"
   // engineType = "client" // enable Prisma ORM without Rust
 }
 
+// PostgreSQL database connection — URL is provided via prisma.config.ts
 datasource db {
   provider = "postgres"
 }
 
+// Admin roles: 'admin' can manage channels, 'full_access' can also manage other admins
 enum AdminRole {
   admin
   full_access
 }
 
+// Stores authorized admin users who can interact with the help bot.
+// Roles control which commands are available to each admin.
 model Admin {
   id         Int       @id @default(autoincrement())
   telegramId BigInt    @unique @map("telegram_id")
@@ -23,6 +30,9 @@ model Admin {
   @@map("admins")
 }
 
+// Represents a Telegram channel being monitored for new memes.
+// isActive controls whether the polling loop checks this channel.
+// lastMessageId tracks the highest message ID already processed to avoid duplicates.
 model Chat {
   id            Int      @id @default(autoincrement())
   chatId        BigInt   @unique
@@ -38,6 +48,9 @@ model Chat {
   @@map("chats")
 }
 
+// Stores the MD5 hash of a stripped thumbnail (~32x32 JPEG) for exact-match deduplication.
+// Each unique hash represents a distinct piece of media content.
+// isPostedToFilteredChat tracks whether this content has been flagged as a duplicate.
 model Minithumbnail {
   id                     Int      @id @default(autoincrement())
   md5                    String   @unique @db.Char(32)
@@ -45,14 +58,16 @@ model Minithumbnail {
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
-  // Каналы-источники этого контента                                                                                                                
+  // Channels where this content has appeared (many-to-many via MinithumbnailSource)
   channelsFrom MinithumbnailSource[]
 
   @@index([isPostedToFilteredChat])
   @@map("minithumbnails")
 }
 
-// Связующая таблица: из каких каналов пришёл контент                                                                                               
+// Join table linking thumbnails to their source channels.
+// Tracks which channels have posted a given piece of content.
+// The unique constraint prevents duplicate entries for the same thumbnail-channel pair.
 model MinithumbnailSource {
   id              Int           @id @default(autoincrement())
   minithumbnail   Minithumbnail @relation(fields: [minithumbnailId], references: [id], onDelete: Cascade)
@@ -66,6 +81,8 @@ model MinithumbnailSource {
   @@map("minithumbnail_sources")
 }
 
+// Tracks seen sticker pack IDs to avoid re-processing the same stickers.
+// Currently unused but reserved for future sticker deduplication features.
 model Sticker {
   id        Int      @id @default(autoincrement())
   setId     BigInt   @unique

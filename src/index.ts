@@ -9,12 +9,17 @@ import { isAdmin, loadAdmins } from './services/admin.service';
 import { LogLevel } from './utils/common/dtos';
 import { systemLogger } from './utils/system-logger';
 
+// Telegram chat IDs for forwarding destinations
+// PROXY_CHAT_ID — where new (unique) memes are sent
+// FILTERED_CHAT_ID — where duplicates or rejected content goes
 const PROXY_CHAT_ID = -1003518762032;
 const FILTERED_CHAT_ID = -1003722286620;
+// How often to poll channels for new messages (in milliseconds)
 const POLL_INTERVAL = 60000;
 
 // ============ CRITICAL ERROR HANDLING ============
-
+// These errors indicate the Telegram client has lost connection
+// and cannot recover without a restart
 const CRITICAL_ERRORS = ['Not connected', 'disconnect'];
 
 const handleCriticalError = (error: unknown) => {
@@ -31,7 +36,9 @@ const handleCriticalError = (error: unknown) => {
   }
 };
 
+// Exit on uncaught exceptions that break the Telegram connection
 process.on('uncaughtException', handleCriticalError);
+// Ignore transient timeout/connection errors, crash on everything else
 process.on('unhandledRejection', (reason) => {
   const errorString = String(reason);
   if (errorString.includes('TIMEOUT') || errorString.includes('Not connected')) {
@@ -42,6 +49,8 @@ process.on('unhandledRejection', (reason) => {
 
 // ============ HELPERS ============
 
+// Checks if a message contains any URL — used to filter out ads/promotions
+// Looks in: plain text, message entities (links), and inline keyboard buttons
 const hasUrl = (message: Api.Message): boolean => {
   const text = message.message || message.text;
   if (text && /https?:\/\//.test(text)) {
@@ -69,24 +78,31 @@ const hasUrl = (message: Api.Message): boolean => {
   return false;
 };
 
+// Returns the Telegram media type name (e.g. 'MessageMediaPhoto', 'MessageMediaDocument')
 const getMediaType = (media: Api.TypeMessageMedia): string => {
   return media.className || 'Unknown';
 };
 
+// Extracts the stripped thumbnail bytes (type 'i', ~32x32 JPEG) from a message.
+// Telegram embeds this tiny thumbnail directly in the API response — no download needed.
+// We use it for fast MD5-based deduplication.
 const extractThumbnailBytes = (message: Api.Message): Buffer | null => {
   const media = message.media;
   if (!media) return null;
 
   let thumbs: Api.TypePhotoSize[] | undefined;
 
+  // Documents (videos, GIFs, files) store thumbnails in 'thumbs'
   if ('document' in media && media.document && 'thumbs' in media.document) {
     thumbs = media.document.thumbs;
   }
 
+  // Photos store thumbnails in 'sizes'
   if ('photo' in media && media.photo && 'sizes' in media.photo) {
     thumbs = media.photo.sizes;
   }
 
+  // Stories can contain either photos or documents
   if ('story' in media && media.story && 'media' in media.story) {
     const storyMedia = media.story.media;
     if (storyMedia && 'photo' in storyMedia && storyMedia.photo && 'sizes' in storyMedia.photo) {
@@ -104,6 +120,7 @@ const extractThumbnailBytes = (message: Api.Message): Buffer | null => {
 
   if (!thumbs) return null;
 
+  // Find the stripped thumbnail (type 'i') — this is the smallest inline thumbnail
   const stripped = thumbs.find(
     (t): t is Api.PhotoStrippedSize => 'type' in t && t.type === 'i' && 'bytes' in t,
   );
@@ -115,12 +132,14 @@ const extractThumbnailBytes = (message: Api.Message): Buffer | null => {
   return null;
 };
 
+// Computes MD5 hash of thumbnail bytes for exact-match deduplication
 const computeMd5 = (data: Buffer): string => {
   return crypto.createHash('md5').update(data).digest('hex');
 };
 
 // ============ FORWARDING ============
 
+// Forwards messages to the filtered channel (duplicates, ads, no-media)
 const forwardToFiltered = async (messageIds: number[], sourceChatId: bigint, reason: string) => {
   if (!FILTERED_CHAT_ID) return;
 
@@ -135,6 +154,7 @@ const forwardToFiltered = async (messageIds: number[], sourceChatId: bigint, rea
   });
 };
 
+// Forwards new (unique) messages to the proxy channel for review
 const forwardToProxy = async (messageIds: number[], sourceChatId: bigint, reason: string) => {
   await tgClient.forwardMessages(PROXY_CHAT_ID, {
     fromPeer: String(sourceChatId),
@@ -149,6 +169,13 @@ const forwardToProxy = async (messageIds: number[], sourceChatId: bigint, reason
 
 // ============ SINGLE MESSAGE PROCESSING ============
 
+// Processes a single message: filters, deduplicates, and forwards
+// Decision flow:
+//   1. No media → filtered (not a meme)
+//   2. Has URL → filtered (likely an ad)
+//   3. No extractable thumbnail → proxy (can't deduplicate, forward for manual review)
+//   4. New thumbnail hash → proxy (unique content)
+//   5. Duplicate thumbnail hash → filtered (already seen)
 const processMessage = async (
   message: Api.Message,
   sourceChatId: bigint,
@@ -188,6 +215,10 @@ const processMessage = async (
 
 // ============ GROUPED MESSAGE PROCESSING ============
 
+// Processes an album/group of messages (Telegram albums share a groupedId).
+// The entire group is treated as one unit — either all forwarded or all filtered.
+// Deduplication uses the first message's thumbnail to decide for the whole group,
+// but ALL thumbnails in the group are tracked for future deduplication.
 const processGroupedMessages = async (
   messages: Api.Message[],
   sourceChatId: bigint,
@@ -195,19 +226,19 @@ const processGroupedMessages = async (
 ): Promise<void> => {
   const messageIds = messages.map((m) => m.id);
 
-  // Реклама -- если хоть одно сообщение с URL, вся группа в filtered
+  // If any message in the group has a URL, reject the entire group as an ad
   if (messages.some((m) => hasUrl(m))) {
     await forwardToFiltered(messageIds, sourceChatId, `[${channelTitle}] группа реклама/URL`);
     return;
   }
 
-  // Нет медиа ни в одном -- в filtered
+  // If none of the messages have media, reject the group
   if (messages.every((m) => !m.media)) {
     await forwardToFiltered(messageIds, sourceChatId, `[${channelTitle}] группа без медиа`);
     return;
   }
 
-  // Дедупликация: берём thumbnail из первого сообщения с thumbnail
+  // Deduplication: use the first extractable thumbnail to decide for the whole group
   let firstMd5: string | null = null;
 
   for (const msg of messages) {
@@ -215,12 +246,12 @@ const processGroupedMessages = async (
     if (thumbBytes) {
       const md5 = computeMd5(thumbBytes);
 
-      // Трекаем ВСЕ thumbnails группы для будущей дедупликации
+      // Track ALL thumbnails in the group so future messages can match any of them
       const trackResult = await checkAndTrackMinithumbnail(md5, sourceChatId);
 
       if (firstMd5 === null) {
         firstMd5 = md5;
-        // Решение о forward/reject на основе первого thumbnail
+        // If the first thumbnail is a duplicate, reject the entire group
         if (!trackResult.isNew) {
           await forwardToFiltered(messageIds, sourceChatId, `[${channelTitle}] группа дубликат`);
           return;
@@ -229,8 +260,8 @@ const processGroupedMessages = async (
     }
   }
 
-  // Если нет thumbnails вообще -- forward без дедупликации
-  // Иначе -- первый thumbnail новый, forward всю группу
+  // If no thumbnails were found at all, forward without deduplication
+  // Otherwise, the first thumbnail was new, so forward the whole group
   await forwardToProxy(
     messageIds,
     sourceChatId,
@@ -240,6 +271,11 @@ const processGroupedMessages = async (
 
 // ============ POLLING ============
 
+// Polls all active channels for new messages since the last seen message ID.
+// Messages are split into two categories:
+//   - Ungrouped: processed individually via processMessage()
+//   - Grouped (albums): processed together via processGroupedMessages()
+// After processing, the channel's lastMessageId is updated to avoid re-processing.
 const pollMessages = async () => {
   systemLogger.log({
     level: LogLevel.LOG,
@@ -253,12 +289,14 @@ const pollMessages = async () => {
     const { chatId, title } = channel;
 
     try {
+      // Fetch up to 100 most recent messages from the channel
       const messages = await tgClient.getMessages(String(chatId), { limit: 100 });
       const lastSeen = channel.lastMessageId;
 
       if (messages.length > 0) {
         const newestMessageId = messages[0].id;
 
+        // Filter to only messages newer than what we've already processed
         const newMessages = messages.filter((m) => m.id > lastSeen);
 
         if (newMessages.length > 0) {
@@ -268,7 +306,7 @@ const pollMessages = async () => {
             message: `[${title}] Новых сообщений: ${newMessages.length}`,
           });
 
-          // Разделяем на группы и одиночные
+          // Split messages into grouped (albums) and ungrouped
           const groups = new Map<string, Api.Message[]>();
           const ungrouped: Api.Message[] = [];
 
@@ -282,7 +320,7 @@ const pollMessages = async () => {
             }
           }
 
-          // Обрабатываем одиночные сообщения
+          // Process standalone messages one by one
           for (const message of ungrouped) {
             try {
               await processMessage(message, chatId, title);
@@ -296,7 +334,7 @@ const pollMessages = async () => {
             }
           }
 
-          // Обрабатываем группы (альбомы)
+          // Process grouped messages (albums) as a single unit
           for (const [groupId, groupMessages] of groups) {
             try {
               await processGroupedMessages(groupMessages, chatId, title);
@@ -311,6 +349,7 @@ const pollMessages = async () => {
           }
         }
 
+        // Update the last seen message ID so we don't re-process these next poll
         if (newestMessageId > lastSeen) {
           await updateLastMessageId(chatId, newestMessageId);
         }
@@ -328,6 +367,9 @@ const pollMessages = async () => {
 
 // ============ BOT CLIENT SETUP ============
 
+// Sets up the optional Telegram Bot API client (Telegraf) for admin commands.
+// This is separate from the userbot (tgClient) and requires a BOT_TOKEN.
+// Admins can use commands like /add, /remove, /channels to manage watched channels.
 const setupBotClient = async () => {
   const botClient = getBotClient();
 
@@ -346,9 +388,11 @@ const setupBotClient = async () => {
     message: 'Запуск help bot...',
   });
 
+  // Handle incoming text messages from admins
   botClient.on('text', async (ctx) => {
     const { from, chat, message } = ctx;
 
+    // Only respond to known admins
     if (!from || !isAdmin(from.id)) {
       return;
     }
@@ -381,6 +425,7 @@ const setupBotClient = async () => {
       return;
     }
 
+    // Execute slash commands via the command router
     if (message.text?.startsWith('/')) {
       const result = await executeCommand(message.text, ctx);
 
@@ -393,6 +438,7 @@ const setupBotClient = async () => {
     await ctx.reply('Напиши /help для списка команд');
   });
 
+  // Global error handler for bot updates
   botClient.catch((err, ctx) => {
     systemLogger.log({
       level: LogLevel.ERROR,
@@ -408,6 +454,7 @@ const setupBotClient = async () => {
   try {
     await botClient.launch();
 
+    // Register bot commands in Telegram
     await botClient.telegram.setMyCommands([
       { command: 'start', description: 'Начать работу' },
       { command: 'help', description: 'Справка по командам' },
@@ -431,8 +478,10 @@ const setupBotClient = async () => {
 
 // ============ MAIN ============
 
+// Simple promise-based sleep utility for the polling loop
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Main entry point: initializes connections, loads config, and starts the polling loop
 const main = async () => {
   systemLogger.log({
     level: LogLevel.INFO,
@@ -440,8 +489,10 @@ const main = async () => {
     message: 'meme-stealer starting...',
   });
 
+  // Configure SOCKS5 proxy for all HTTP(S) and Telegram connections
   await initProxy();
 
+  // Connect the userbot (Telegram MTProto client) and cache dialog list
   await tgClient.connect();
   await tgClient.getDialogs();
 
@@ -451,8 +502,10 @@ const main = async () => {
     message: 'tgClient подключен',
   });
 
+  // Load admin list into memory for fast access checks
   await loadAdmins();
 
+  // Start the optional Bot API client for admin commands (non-blocking)
   setupBotClient().catch((err) => {
     systemLogger.log({
       level: LogLevel.ERROR,
@@ -468,12 +521,14 @@ const main = async () => {
     message: 'Запуск polling...',
   });
 
+  // Infinite polling loop: fetch new messages, process, then wait
   while (true) {
     await pollMessages();
     await sleep(POLL_INTERVAL);
   }
 };
 
+// Wrap main() in a try-catch to log fatal errors before exiting
 (async () => {
   try {
     await main();

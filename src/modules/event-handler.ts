@@ -7,9 +7,16 @@ import { checkAndTrackMinithumbnail, updateLastMessageId } from './db';
 import { LogLevel } from '../utils/common/dtos';
 import { systemLogger } from '../utils/system-logger';
 
+// Event-driven message handler (alternative to polling in index.ts).
+// Listens for new messages in real-time via Telegram's update stream.
+// Currently not wired into main(), but available for future use.
+
+// Destination chat IDs for forwarding
 const PROXY_CHAT_ID = -1003518762032;
 const FILTERED_CHAT_ID = -1003722286620;
 
+// Checks if a message contains any URL (plain text, entities, or inline buttons).
+// Used to filter out promotional content.
 const hasUrl = (message: Api.Message): boolean => {
   const text = message.message || message.text;
   if (text && /https?:\/\//.test(text)) {
@@ -37,10 +44,14 @@ const hasUrl = (message: Api.Message): boolean => {
   return false;
 };
 
+// Returns the Telegram media class name for logging purposes.
 const getMediaType = (media: Api.TypeMessageMedia): string => {
   return media.className || 'Unknown';
 };
 
+// Extracts the stripped thumbnail (type 'i', ~32x32 JPEG) from a message.
+// This tiny thumbnail is embedded in the API response — no download needed.
+// Used for fast MD5-based deduplication.
 const extractThumbnailBytes = (message: Api.Message): Buffer | null => {
   const media = message.media;
   if (!media) return null;
@@ -83,10 +94,12 @@ const extractThumbnailBytes = (message: Api.Message): Buffer | null => {
   return null;
 };
 
+// Computes MD5 hash of thumbnail bytes for exact-match deduplication.
 const computeMd5 = (data: Buffer): string => {
   return crypto.createHash('md5').update(data).digest('hex');
 };
 
+// Forwards a single message to the filtered channel (duplicates, ads, no-media).
 const forwardToFiltered = async (message: Api.Message, sourceChatId: bigint, reason: string) => {
   if (!FILTERED_CHAT_ID) return;
 
@@ -102,6 +115,8 @@ const forwardToFiltered = async (message: Api.Message, sourceChatId: bigint, rea
   });
 };
 
+// Processes a single incoming message: filters, deduplicates, and forwards.
+// Flow: no media → filtered | has URL → filtered | no thumbnail → proxy | new hash → proxy | duplicate → filtered
 const processMessage = async (
   message: Api.Message,
   sourceChatId: bigint,
@@ -156,11 +171,16 @@ const processMessage = async (
   }
 };
 
+// Main event handler for the NewMessage event.
+// Extracts the chat ID from various peer formats, normalizes it,
+// then processes the message and updates the last seen message ID.
 export const handleNewMessage = async (event: NewMessageEvent) => {
   const message = event.message;
 
+  // Try to get the chat ID from the event first, then fall back to the message
   let rawChatId = event.chatId ?? message.chatId;
 
+  // If still missing, extract from the peer ID (channel, group, or user)
   if (!rawChatId && message.peerId) {
     if ('channelId' in message.peerId) {
       rawChatId = message.peerId.channelId;
@@ -181,6 +201,7 @@ export const handleNewMessage = async (event: NewMessageEvent) => {
     return;
   }
 
+  // Sanitize and convert to BigInt for database operations
   const cleanChatId = BigInt(String(rawChatId).replace(/\n/g, ''));
 
   try {

@@ -1,9 +1,15 @@
+// Database seed script — populates the database with initial channels and admins.
+// Run via `npm run seed` or `npm run db:seed`.
+// Uses upsert to safely re-run without duplicating existing records.
+
 import dotenv from 'dotenv';
 dotenv.config();
 
 import { db } from './client';
 import { AdminRole } from '../generated/client';
 
+// Initial list of Telegram channels to monitor for memes.
+// Each entry contains the Bot API format chat ID and the display title.
 const CHANNELS_TO_SEED = [
   { chatId: -1001335331263, title: 'СЛАВА БОГУ У НАС ЕСТЬ МЕМЫ' },
   { chatId: -1001283644155, title: 'шерстяные проказники * коты' },
@@ -28,15 +34,19 @@ const CHANNELS_TO_SEED = [
   { chatId: -1001908909419, title: 'котямбусы и компудахтеры' },
 ];
 
+// Initial list of admin users who can interact with the help bot.
+// full_access role grants permission to manage other admins and view sensitive data.
 const ADMINS_TO_SEED = [
   { telegramId: BigInt(8078429305), role: AdminRole.full_access, name: null },
   { telegramId: BigInt(72548251), role: AdminRole.full_access, name: null },
   { telegramId: BigInt(472537130), role: AdminRole.full_access, name: null },
 ];
 
+// Main seed function: inserts or updates channels and admins in the database.
 async function seed() {
   console.log('Seeding channels...');
 
+  // Upsert each channel: update title if exists, create new record if not
   for (const channel of CHANNELS_TO_SEED) {
     await db.chat.upsert({
       where: { chatId: channel.chatId },
@@ -54,6 +64,7 @@ async function seed() {
 
   console.log('\nSeeding admins...');
 
+  // Upsert each admin: update role if exists, create new record if not
   for (const admin of ADMINS_TO_SEED) {
     await db.admin.upsert({
       where: { telegramId: admin.telegramId },
@@ -66,6 +77,7 @@ async function seed() {
   console.log(`\nSeeded ${ADMINS_TO_SEED.length} admins.`);
 }
 
+// Execute the seed function, handle errors, and ensure the database connection is closed
 seed()
   .catch((e) => {
     console.error('Seed error:', e);
