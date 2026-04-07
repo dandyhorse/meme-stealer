@@ -60,7 +60,8 @@ model ContentHashSource {
   sourceChatId  BigInt
   addedAt       DateTime    @default(now())
 
-  @@unique([contentHashId, chatId])
+  @@index([contentHashId])
+  @@unique([chatId, messageId, sourceChatId])
   @@index([chatId])
   @@map("content_hash_sources")
 }

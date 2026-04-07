@@ -4,6 +4,7 @@ import { NewMessage, NewMessageEvent } from 'telegram/events';
 import { checkContentHash, getOriginalSource, trackContentHash } from './content-hash-db';
 import { updateLastMessageId } from './db';
 import { LogLevel } from '../utils/common/dtos';
+import { sendDuplicateAlbum } from '../utils/duplicate-album';
 import { safeComputeHash } from '../utils/phash';
 import { systemLogger } from '../utils/system-logger';
 
@@ -105,34 +106,37 @@ const processMessage = async (
       message: `[${channelTitle}] ${message.id} → proxy (новый)`,
     });
   } else {
+    let albumSent = false;
+
     try {
       const original = await getOriginalSource(result.existing!.id);
-      if (original && original.messageId && original.sourceChatId) {
-        await tgClient.sendMessage(FILTERED_CHAT_ID, {
-          message: `📌 ОРИГИНАЛ | distance: ${result.existing!.distance} | chat: ${original.sourceChatId} | msg: ${original.messageId}`,
+      if (original?.messageId && original?.sourceChatId) {
+        const [originalMsg] = await tgClient.getMessages(String(original.sourceChatId), {
+          ids: [original.messageId],
         });
-        await tgClient.forwardMessages(FILTERED_CHAT_ID, {
-          fromPeer: String(original.sourceChatId),
-          messages: [original.messageId],
-        });
-      } else {
-        await tgClient.sendMessage(FILTERED_CHAT_ID, {
-          message: `📌 ОРИГИНАЛ не найден (старая запись) | distance: ${result.existing!.distance}`,
-        });
+        if (originalMsg?.media && message.media) {
+          albumSent = await sendDuplicateAlbum(
+            tgClient,
+            FILTERED_CHAT_ID,
+            originalMsg.media,
+            message.media,
+          );
+        }
       }
     } catch (err) {
       systemLogger.log({
         level: LogLevel.WARN,
         module: 'DEDUP',
-        message: `Не удалось переслать оригинал для hashId=${result.existing!.id}`,
+        message: `Не удалось получить оригинал для hashId=${result.existing!.id}`,
         details: err,
       });
     }
 
-    await tgClient.sendMessage(FILTERED_CHAT_ID, {
-      message: `🔁 ДУБЛЬ | [${channelTitle}] | msg: ${message.id}`,
-    });
-    await forwardToFiltered(message, sourceChatId, `[${channelTitle}] дубликат`);
+    if (!albumSent) {
+      await tgClient.sendMessage(FILTERED_CHAT_ID, { message: 'DUPLICATE' });
+      await forwardToFiltered(message, sourceChatId, `[${channelTitle}] дубликат`);
+    }
+
     await trackContentHash(hash, sourceChatId, message.id, sourceChatId, result.existing!.id);
   }
 };

@@ -64,15 +64,8 @@ export const addContentHashSource = async (
     throw new Error(`Chat not found: ${chatId}`);
   }
 
-  return db.contentHashSource.upsert({
-    where: {
-      contentHashId_chatId: {
-        contentHashId,
-        chatId: chat.id,
-      },
-    },
-    update: {},
-    create: {
+  return db.contentHashSource.create({
+    data: {
       contentHashId,
       chatId: chat.id,
       messageId,

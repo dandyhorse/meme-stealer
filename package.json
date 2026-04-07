@@ -16,7 +16,12 @@
     "start": "node -r tsconfig-paths/register .build/src/index.js",
     "build-test": "npm run build && npm run test",
     "prepare": "husky",
-    "db:seed": "ts-node --require tsconfig-paths/register prisma/seed.ts"
+    "db:seed": "ts-node --require tsconfig-paths/register prisma/seed.ts",
+    "backfill": "npx tsx --require tsconfig-paths/register src/scripts/backfill-hashes.ts",
+    "cleanup": "npx tsx --require tsconfig-paths/register src/scripts/cleanup-duplicates.ts",
+    "cleanup:delete": "npx tsx --require tsconfig-paths/register src/scripts/cleanup-duplicates.ts --delete",
+    "dedup-db": "npx tsx --require tsconfig-paths/register src/scripts/dedup-db.ts",
+    "dedup-db:execute": "npx tsx --require tsconfig-paths/register src/scripts/dedup-db.ts --execute"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.4.1",

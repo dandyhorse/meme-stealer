@@ -29,6 +29,12 @@ export const computeDHash = async (imageBuffer: Buffer): Promise<bigint> => {
     }
   }
 
+  // Convert unsigned 64-bit to signed (PostgreSQL BIGINT is signed)
+  const MAX_SIGNED = (BigInt(1) << BigInt(63)) - BigInt(1);
+  if (hash > MAX_SIGNED) {
+    hash = hash - (BigInt(1) << BigInt(64));
+  }
+
   return hash;
 };
 
@@ -36,7 +42,7 @@ export const computeDHash = async (imageBuffer: Buffer): Promise<bigint> => {
  * Hamming distance between two 64-bit hashes.
  */
 export const hammingDistance = (a: bigint, b: bigint): number => {
-  let xor = a ^ b;
+  let xor = (a ^ b) & BigInt('0xFFFFFFFFFFFFFFFF');
   let count = 0;
   while (xor > BigInt(0)) {
     count += Number(xor & BigInt(1));
