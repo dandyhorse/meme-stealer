@@ -1,6 +1,7 @@
 import { db } from '../../prisma/client';
 
 export interface ChannelData {
+  id: number;
   chatId: bigint;
   title: string;
   isActive: boolean;
@@ -13,6 +14,7 @@ export const getActiveChannels = async (): Promise<ChannelData[]> => {
   });
 
   return channels.map((ch) => ({
+    id: ch.id,
     chatId: ch.chatId,
     title: ch.title,
     isActive: ch.isActive,

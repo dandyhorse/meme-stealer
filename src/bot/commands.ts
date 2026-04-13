@@ -1,8 +1,8 @@
-import { tgClient } from '@config';
+import { tgClient } from '@config/clients';
 import { Context } from 'telegraf';
 import { Api } from 'telegram';
 
-import { resolveChannelId } from './helpers/resolve-channel';
+import { resolveChannelId, BOT_API_CHANNEL_OFFSET } from './helpers/resolve-channel';
 import { AdminRole } from '../../generated/client';
 import { addAdmin, removeAdmin, hasFullAccess } from '../services/admin.service';
 import { getActiveChannels, addChannel, deactivateChannel } from '../services/channel.service';
@@ -96,7 +96,7 @@ export const addChannelCommand: BotCommand = {
         message: `Ошибка добавления канала: ${input}`,
         details: error instanceof Error ? { message: error.message, stack: error.stack } : error,
       });
-      return `Ошибка: ${String(error)}`;
+      return 'Произошла ошибка. Подробности в логах.';
     }
   },
 };
@@ -134,7 +134,7 @@ export const removeChannelCommand: BotCommand = {
         message: `Ошибка удаления канала: ${args[0]}`,
         details: error instanceof Error ? { message: error.message, stack: error.stack } : error,
       });
-      return `Ошибка: ${String(error)}`;
+      return 'Произошла ошибка. Подробности в логах.';
     }
   },
 };
@@ -153,11 +153,16 @@ export const allChannelsCommand: BotCommand = {
             const peer = dialog.entity as Api.Channel;
             const channelId = peer.id.toJSNumber();
 
-            const botApiId = -1000000000000 - channelId;
+            const botApiId = BOT_API_CHANNEL_OFFSET - channelId;
             const type = dialog.isChannel ? '[канал]' : '[группа]';
             result += `${type} <code>${botApiId}</code> — ${peer.title || 'без названия'}\n`;
-          } catch {
-            // skip
+          } catch (error) {
+            systemLogger.log({
+              level: LogLevel.WARN,
+              module: 'BOT_COMMANDS',
+              message: 'Ошибка обработки диалога',
+              details: error,
+            });
           }
         }
       }
@@ -234,7 +239,7 @@ export const addAdminCommand: BotCommand = {
         message: `Ошибка добавления админа: ${args[1]}`,
         details: error,
       });
-      return `Ошибка: ${String(error)}`;
+      return 'Произошла ошибка. Подробности в логах.';
     }
   },
 };
@@ -248,8 +253,11 @@ export const removeAdminCommand: BotCommand = {
       return 'Использование: /removeAdmin <telegram_id>';
     }
 
-    const removed = await removeAdmin(BigInt(args[0]));
-    return removed ? `Админ ${args[0]} удален` : 'Админ не найден';
+    const result = await removeAdmin(BigInt(args[0]));
+    if (result === 'last_full_access') {
+      return 'Невозможно удалить последнего администратора с полным доступом';
+    }
+    return result === 'removed' ? `Админ ${args[0]} удален` : 'Админ не найден';
   },
 };
 
@@ -296,8 +304,10 @@ export const executeCommand = async (commandText: string, ctx?: Context): Promis
     return `Неизвестная команда: ${command}`;
   }
 
-  if (cmd.requireFullAccess && ctx?.from && !hasFullAccess(ctx.from.id)) {
-    return 'Нет доступа к этой команде';
+  if (cmd.requireFullAccess) {
+    if (!ctx?.from || !hasFullAccess(ctx.from.id)) {
+      return 'Нет доступа к этой команде';
+    }
   }
 
   try {
@@ -309,6 +319,6 @@ export const executeCommand = async (commandText: string, ctx?: Context): Promis
       message: `Ошибка выполнения команды: ${command}`,
       details: error,
     });
-    return `Ошибка выполнения команды: ${String(error)}`;
+    return 'Произошла ошибка. Подробности в логах.';
   }
 };

@@ -32,12 +32,22 @@ export const addAdmin = async (
   await loadAdmins();
 };
 
-export const removeAdmin = async (telegramId: bigint): Promise<boolean> => {
+export const removeAdmin = async (
+  telegramId: bigint,
+): Promise<'removed' | 'not_found' | 'last_full_access'> => {
+  const admin = adminCache.find((a) => a.telegramId === telegramId);
+  if (!admin) return 'not_found';
+
+  if (admin.role === 'full_access') {
+    const fullAccessCount = adminCache.filter((a) => a.role === 'full_access').length;
+    if (fullAccessCount <= 1) return 'last_full_access';
+  }
+
   try {
     await db.admin.delete({ where: { telegramId } });
     await loadAdmins();
-    return true;
+    return 'removed';
   } catch {
-    return false;
+    return 'not_found';
   }
 };

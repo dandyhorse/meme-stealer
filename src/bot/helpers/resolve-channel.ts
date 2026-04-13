@@ -1,8 +1,10 @@
-import { tgClient } from '@config';
+import { tgClient } from '@config/clients';
 import { Api } from 'telegram';
 
 import { LogLevel } from '../../utils/common/dtos/index';
 import { systemLogger } from '../../utils/system-logger';
+
+export const BOT_API_CHANNEL_OFFSET = -1_000_000_000_000;
 
 export const resolveChannelId = async (input: string): Promise<{ id: string; title: string }> => {
   if (/^-?\d+$/.test(input)) {
@@ -25,7 +27,7 @@ export const resolveChannelId = async (input: string): Promise<{ id: string; tit
   }
 
   const username = input
-    .replace(/^[htps]+:\/\//, '')
+    .replace(/^https?:\/\//, '')
     .replace(/^(www\.)?t\.me\//, '')
     .replace(/^(www\.)?telegram\.me\//, '')
     .replace(/^@/, '')
@@ -66,7 +68,7 @@ export const resolveChannelId = async (input: string): Promise<{ id: string; tit
   });
 
   const title = (channel as Api.Chat).title || 'без названия';
-  const botApiId = -1000000000000 - channelId;
+  const botApiId = BOT_API_CHANNEL_OFFSET - channelId;
 
   return { id: String(botApiId), title };
 };
