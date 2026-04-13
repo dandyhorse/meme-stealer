@@ -32,3 +32,4 @@ generated
 firefox
 
 /generated/prisma
+*.bak
