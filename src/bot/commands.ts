@@ -4,7 +4,9 @@ import { Api } from 'telegram';
 
 import { resolveChannelId } from './helpers/resolve-channel';
 import { AdminRole } from '../../generated/client';
+import { deleteMessagesFromProxy } from '../modules/proxy-cleanup';
 import { addAdmin, removeAdmin, hasFullAccess } from '../services/admin.service';
+import { isBanned, banChannel, unbanChannel, getBannedChannels } from '../services/banned.service';
 import { getActiveChannels, addChannel, deactivateChannel } from '../services/channel.service';
 import { LogLevel } from '../utils/common/dtos/index';
 import { systemLogger } from '../utils/system-logger';
@@ -61,6 +63,10 @@ export const addChannelCommand: BotCommand = {
         module: 'BOT_COMMANDS',
         message: `[add] resolved: id=${id}, title=${title}`,
       });
+
+      if (isBanned(BigInt(id))) {
+        return `Канал в бан-листе: ${title} (<code>${id}</code>). Сначала /unban`;
+      }
 
       systemLogger.log({
         level: LogLevel.LOG,
@@ -253,6 +259,89 @@ export const removeAdminCommand: BotCommand = {
   },
 };
 
+export const banChannelCommand: BotCommand = {
+  name: '/ban',
+  description: 'Забанить канал. Формат: /ban <ссылка или id>',
+  handler: async (args) => {
+    if (args.length < 1) {
+      return 'Использование: /ban <ссылка или id>';
+    }
+
+    try {
+      const input = args[0];
+      const { id, title } = await resolveChannelId(input);
+      await banChannel(BigInt(id), title);
+      await deactivateChannel(BigInt(id));
+
+      const deleted = await deleteMessagesFromProxy(BigInt(id));
+
+      return `Канал забанен: ${title} (<code>${id}</code>)\nУдалено сообщений из proxy: ${deleted}`;
+    } catch (error) {
+      systemLogger.log({
+        level: LogLevel.ERROR,
+        module: 'BOT_COMMANDS',
+        message: `Ошибка бана канала: ${args[0]}`,
+        details: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+      });
+      return `Ошибка: ${String(error)}`;
+    }
+  },
+};
+
+export const unbanChannelCommand: BotCommand = {
+  name: '/unban',
+  description: 'Разбанить канал. Формат: /unban <ссылка или id>',
+  handler: async (args) => {
+    if (args.length < 1) {
+      return 'Использование: /unban <ссылка или id>';
+    }
+
+    try {
+      const input = args[0];
+      let channelId: string;
+
+      if (/^-?\d+$/.test(input)) {
+        channelId = input;
+      } else {
+        const resolved = await resolveChannelId(input);
+        channelId = resolved.id;
+      }
+
+      const removed = await unbanChannel(BigInt(channelId));
+      return removed ? `Канал разбанен (<code>${channelId}</code>)` : 'Канал не найден в бан-листе';
+    } catch (error) {
+      systemLogger.log({
+        level: LogLevel.ERROR,
+        module: 'BOT_COMMANDS',
+        message: `Ошибка разбана канала: ${args[0]}`,
+        details: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+      });
+      return `Ошибка: ${String(error)}`;
+    }
+  },
+};
+
+export const bannedChannelsCommand: BotCommand = {
+  name: '/banned',
+  description: 'Показать забаненные каналы',
+  handler: async () => {
+    const channels = await getBannedChannels();
+
+    let result = '<b>Забаненные каналы:</b>\n\n';
+
+    if (channels.length === 0) {
+      result += '  Нет каналов\n';
+    } else {
+      for (const ch of channels) {
+        result += `<code>${ch.chatId}</code> — ${ch.title}\n`;
+      }
+    }
+
+    result += `\nВсего: ${channels.length}`;
+    return result;
+  },
+};
+
 export const helpCommand: BotCommand = {
   name: '/help',
   description: 'Показать справку по командам',
@@ -261,7 +350,10 @@ export const helpCommand: BotCommand = {
 
 /channels — список каналов в полинге
 /add <code>&lt;ссылка или id&gt;</code> — добавить канал в полинг
-/remove <code>&lt;ссылка или id&gt;</code> — деактивировать канал`;
+/remove <code>&lt;ссылка или id&gt;</code> — деактивировать канал
+/ban <code>&lt;ссылка или id&gt;</code> — забанить канал
+/unban <code>&lt;ссылка или id&gt;</code> — разбанить канал
+/banned — список забаненных каналов`;
 
     if (ctx?.from && hasFullAccess(ctx.from.id)) {
       result += `
@@ -282,6 +374,9 @@ export const allCommands: BotCommand[] = [
   allChannelsCommand,
   addChannelCommand,
   removeChannelCommand,
+  banChannelCommand,
+  unbanChannelCommand,
+  bannedChannelsCommand,
   privateChatsCommand,
   addAdminCommand,
   removeAdminCommand,

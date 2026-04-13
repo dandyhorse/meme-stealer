@@ -73,3 +73,13 @@ model Sticker {
 
   @@map("stickers")
 }
+
+model BannedChat {
+  id        Int      @id @default(autoincrement())
+  chatId    BigInt   @unique
+  title     String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("banned_chats")
+}
+

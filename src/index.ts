@@ -5,6 +5,7 @@ import { executeCommand } from './bot/commands';
 import { checkContentHash, getOriginalSource, trackContentHash } from './modules/content-hash-db';
 import { getActiveChats, updateLastMessageId } from './modules/db';
 import { isAdmin, loadAdmins } from './services/admin.service';
+import { isBanned, loadBannedChats } from './services/banned.service';
 import { LogLevel } from './utils/common/dtos';
 import { sendDuplicateAlbum } from './utils/duplicate-album';
 import { safeComputeHash } from './utils/phash';
@@ -266,6 +267,8 @@ const pollMessages = async () => {
   for (const channel of channels) {
     const { chatId, title } = channel;
 
+    if (isBanned(chatId)) continue;
+
     try {
       const messages = await tgClient.getMessages(String(chatId), { limit: 100 });
       const lastSeen = channel.lastMessageId;
@@ -466,6 +469,7 @@ const main = async () => {
   });
 
   await loadAdmins();
+  await loadBannedChats();
 
   setupBotClient().catch((err) => {
     systemLogger.log({
