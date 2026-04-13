@@ -32,38 +32,38 @@ model Chat {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  minithumbnails MinithumbnailSource[]
+  contentHashes  ContentHashSource[]
 
   @@index([isActive])
   @@map("chats")
 }
 
-model Minithumbnail {
-  id                     Int      @id @default(autoincrement())
-  md5                    String   @unique @db.Char(32)
-  isPostedToFilteredChat Boolean  @default(false)
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+model ContentHash {
+  id        Int      @id @default(autoincrement())
+  phash     BigInt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  // Каналы-источники этого контента                                                                                                                
-  channelsFrom MinithumbnailSource[]
+  sources ContentHashSource[]
 
-  @@index([isPostedToFilteredChat])
-  @@map("minithumbnails")
+  @@index([phash])
+  @@map("content_hashes")
 }
 
-// Связующая таблица: из каких каналов пришёл контент                                                                                               
-model MinithumbnailSource {
-  id              Int           @id @default(autoincrement())
-  minithumbnail   Minithumbnail @relation(fields: [minithumbnailId], references: [id], onDelete: Cascade)
-  minithumbnailId Int
-  chat            Chat          @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  chatId          Int
-  addedAt         DateTime      @default(now())
+model ContentHashSource {
+  id            Int         @id @default(autoincrement())
+  contentHash   ContentHash @relation(fields: [contentHashId], references: [id], onDelete: Cascade)
+  contentHashId Int
+  chat          Chat        @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId        Int
+  messageId     Int
+  sourceChatId  BigInt
+  addedAt       DateTime    @default(now())
 
-  @@unique([minithumbnailId, chatId])
+  @@index([contentHashId])
+  @@unique([chatId, messageId, sourceChatId])
   @@index([chatId])
-  @@map("minithumbnail_sources")
+  @@map("content_hash_sources")
 }
 
 model Sticker {
@@ -73,3 +73,13 @@ model Sticker {
 
   @@map("stickers")
 }
+
+model BannedChat {
+  id        Int      @id @default(autoincrement())
+  chatId    BigInt   @unique
+  title     String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("banned_chats")
+}
+

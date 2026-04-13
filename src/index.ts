@@ -1,12 +1,14 @@
-import crypto from 'crypto';
-
 import { tgClient, getBotClient, initProxy } from '@config';
 import { Api } from 'telegram';
 
 import { executeCommand } from './bot/commands';
-import { getActiveChats, checkAndTrackMinithumbnail, updateLastMessageId } from './modules/db';
+import { checkContentHash, getOriginalSource, trackContentHash } from './modules/content-hash-db';
+import { getActiveChats, updateLastMessageId } from './modules/db';
 import { isAdmin, loadAdmins } from './services/admin.service';
+import { isBanned, loadBannedChats } from './services/banned.service';
 import { LogLevel } from './utils/common/dtos';
+import { sendDuplicateAlbum } from './utils/duplicate-album';
+import { safeComputeHash } from './utils/phash';
 import { systemLogger } from './utils/system-logger';
 
 const PROXY_CHAT_ID = -1003518762032;
@@ -73,52 +75,6 @@ const getMediaType = (media: Api.TypeMessageMedia): string => {
   return media.className || 'Unknown';
 };
 
-const extractThumbnailBytes = (message: Api.Message): Buffer | null => {
-  const media = message.media;
-  if (!media) return null;
-
-  let thumbs: Api.TypePhotoSize[] | undefined;
-
-  if ('document' in media && media.document && 'thumbs' in media.document) {
-    thumbs = media.document.thumbs;
-  }
-
-  if ('photo' in media && media.photo && 'sizes' in media.photo) {
-    thumbs = media.photo.sizes;
-  }
-
-  if ('story' in media && media.story && 'media' in media.story) {
-    const storyMedia = media.story.media;
-    if (storyMedia && 'photo' in storyMedia && storyMedia.photo && 'sizes' in storyMedia.photo) {
-      thumbs = storyMedia.photo.sizes;
-    }
-    if (
-      storyMedia &&
-      'document' in storyMedia &&
-      storyMedia.document &&
-      'thumbs' in storyMedia.document
-    ) {
-      thumbs = storyMedia.document.thumbs;
-    }
-  }
-
-  if (!thumbs) return null;
-
-  const stripped = thumbs.find(
-    (t): t is Api.PhotoStrippedSize => 'type' in t && t.type === 'i' && 'bytes' in t,
-  );
-
-  if (stripped && stripped.bytes) {
-    return Buffer.from(stripped.bytes);
-  }
-
-  return null;
-};
-
-const computeMd5 = (data: Buffer): string => {
-  return crypto.createHash('md5').update(data).digest('hex');
-};
-
 // ============ FORWARDING ============
 
 const forwardToFiltered = async (messageIds: number[], sourceChatId: bigint, reason: string) => {
@@ -164,9 +120,9 @@ const processMessage = async (
     return;
   }
 
-  const thumbnailBytes = extractThumbnailBytes(message);
+  const hash = await safeComputeHash(message, tgClient);
 
-  if (!thumbnailBytes) {
+  if (!hash) {
     const mediaType = getMediaType(message.media);
     await forwardToProxy(
       [message.id],
@@ -176,13 +132,44 @@ const processMessage = async (
     return;
   }
 
-  const md5 = computeMd5(thumbnailBytes);
-  const result = await checkAndTrackMinithumbnail(md5, sourceChatId);
+  const result = await checkContentHash(hash);
 
   if (result.isNew) {
     await forwardToProxy([message.id], sourceChatId, `[${channelTitle}] ${message.id} (новый)`);
+    await trackContentHash(hash, sourceChatId, message.id, sourceChatId);
   } else {
-    await forwardToFiltered([message.id], sourceChatId, `[${channelTitle}] дубликат`);
+    let albumSent = false;
+
+    try {
+      const original = await getOriginalSource(result.existing!.id);
+      if (original?.messageId && original?.sourceChatId) {
+        const [originalMsg] = await tgClient.getMessages(String(original.sourceChatId), {
+          ids: [original.messageId],
+        });
+        if (originalMsg?.media && message.media) {
+          albumSent = await sendDuplicateAlbum(
+            tgClient,
+            FILTERED_CHAT_ID,
+            originalMsg.media,
+            message.media,
+          );
+        }
+      }
+    } catch (err) {
+      systemLogger.log({
+        level: LogLevel.WARN,
+        module: 'DEDUP',
+        message: `Не удалось получить оригинал для hashId=${result.existing!.id}`,
+        details: err,
+      });
+    }
+
+    if (!albumSent) {
+      await tgClient.sendMessage(FILTERED_CHAT_ID, { message: 'DUPLICATE' });
+      await forwardToFiltered([message.id], sourceChatId, `[${channelTitle}] дубликат`);
+    }
+
+    await trackContentHash(hash, sourceChatId, message.id, sourceChatId, result.existing!.id);
   }
 };
 
@@ -207,35 +194,63 @@ const processGroupedMessages = async (
     return;
   }
 
-  // Дедупликация: берём thumbnail из первого сообщения с thumbnail
-  let firstMd5: string | null = null;
+  // Дедупликация: собираем хэши всех сообщений группы
+  const hashes: { hash: bigint; msgId: number }[] = [];
 
   for (const msg of messages) {
-    const thumbBytes = extractThumbnailBytes(msg);
-    if (thumbBytes) {
-      const md5 = computeMd5(thumbBytes);
+    const hash = await safeComputeHash(msg, tgClient);
+    if (hash) {
+      const result = await checkContentHash(hash);
+      if (!result.isNew) {
+        let albumSent = false;
 
-      // Трекаем ВСЕ thumbnails группы для будущей дедупликации
-      const trackResult = await checkAndTrackMinithumbnail(md5, sourceChatId);
-
-      if (firstMd5 === null) {
-        firstMd5 = md5;
-        // Решение о forward/reject на основе первого thumbnail
-        if (!trackResult.isNew) {
-          await forwardToFiltered(messageIds, sourceChatId, `[${channelTitle}] группа дубликат`);
-          return;
+        try {
+          const original = await getOriginalSource(result.existing!.id);
+          if (original?.messageId && original?.sourceChatId) {
+            const [originalMsg] = await tgClient.getMessages(String(original.sourceChatId), {
+              ids: [original.messageId],
+            });
+            if (originalMsg?.media && msg.media) {
+              albumSent = await sendDuplicateAlbum(
+                tgClient,
+                FILTERED_CHAT_ID,
+                originalMsg.media,
+                msg.media,
+              );
+            }
+          }
+        } catch (err) {
+          systemLogger.log({
+            level: LogLevel.WARN,
+            module: 'DEDUP',
+            message: `Не удалось получить оригинал для hashId=${result.existing!.id}`,
+            details: err,
+          });
         }
+
+        if (!albumSent) {
+          await tgClient.sendMessage(FILTERED_CHAT_ID, { message: 'DUPLICATE' });
+          await forwardToFiltered(messageIds, sourceChatId, `[${channelTitle}] группа дубликат`);
+        }
+
+        await trackContentHash(hash, sourceChatId, msg.id, sourceChatId, result.existing!.id);
+        return;
       }
+      hashes.push({ hash, msgId: msg.id });
     }
   }
 
-  // Если нет thumbnails вообще -- forward без дедупликации
-  // Иначе -- первый thumbnail новый, forward всю группу
+  // Все хэши новые или нет thumbnails — forward группу
   await forwardToProxy(
     messageIds,
     sourceChatId,
     `[${channelTitle}] группа (${messageIds.length} сообщ.)`,
   );
+
+  // Записываем хэши ПОСЛЕ успешного форварда
+  for (const { hash, msgId } of hashes) {
+    await trackContentHash(hash, sourceChatId, msgId, sourceChatId);
+  }
 };
 
 // ============ POLLING ============
@@ -251,6 +266,8 @@ const pollMessages = async () => {
 
   for (const channel of channels) {
     const { chatId, title } = channel;
+
+    if (isBanned(chatId)) continue;
 
     try {
       const messages = await tgClient.getMessages(String(chatId), { limit: 100 });
@@ -452,6 +469,7 @@ const main = async () => {
   });
 
   await loadAdmins();
+  await loadBannedChats();
 
   setupBotClient().catch((err) => {
     systemLogger.log({

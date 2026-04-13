@@ -9,6 +9,10 @@ export const loadAdmins = async (): Promise<void> => {
   });
 };
 
+export const getAdminIds = (): bigint[] => {
+  return adminCache.map((a) => a.telegramId);
+};
+
 export const isAdmin = (telegramId: number): boolean => {
   const id = BigInt(telegramId);
   return adminCache.some((a) => a.telegramId === id);
