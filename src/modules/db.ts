@@ -1,12 +1,7 @@
 import { db } from '../../prisma/client';
+import { hammingDistance } from '../utils/phash';
 
 // ============ CHATS ============
-
-export const getActiveChats = async () => {
-  return db.chat.findMany({
-    where: { isActive: true },
-  });
-};
 
 export const findChatByChatId = async (chatId: bigint) => {
   return db.chat.findUnique({
@@ -29,73 +24,95 @@ export const updateLastMessageId = async (chatId: bigint, lastMessageId: number)
   });
 };
 
-// ============ MINITHUMBNAILS ============
+// ============ PHASH CACHE ============
 
-export const findMinithumbnailByMd5 = async (md5: string) => {
-  return db.minithumbnail.findUnique({
-    where: { md5 },
-    include: {
-      channelsFrom: {
-        include: { chat: true },
-      },
-    },
+interface HashCacheEntry {
+  id: number;
+  phash: bigint;
+  sourceCount: number;
+}
+
+let hashCache: HashCacheEntry[] = [];
+let cacheLoaded = false;
+let loadingPromise: Promise<void> | null = null;
+const MAX_CACHE_SIZE = 500_000;
+
+export async function loadHashCache(): Promise<void> {
+  const all = await db.minithumbnail.findMany({
+    where: { phash: { not: null } },
+    select: { id: true, phash: true, _count: { select: { channelsFrom: true } } },
   });
-};
+  hashCache = all.map((h) => ({
+    id: h.id,
+    phash: h.phash!,
+    sourceCount: h._count.channelsFrom,
+  }));
+  cacheLoaded = true;
+  if (hashCache.length >= MAX_CACHE_SIZE) {
+    console.warn(`[phash] Hash cache size ${hashCache.length} exceeds ${MAX_CACHE_SIZE} — consider pruning`);
+  }
+}
 
-export const createMinithumbnail = async (md5: string, chatId: bigint) => {
-  const chat = await findChatByChatId(chatId);
-  if (!chat) {
-    throw new Error(`Chat not found: ${chatId}`);
+async function ensureCacheLoaded(): Promise<void> {
+  if (!cacheLoaded) {
+    if (!loadingPromise) {
+      loadingPromise = loadHashCache().catch((err) => {
+        loadingPromise = null;
+        throw err;
+      });
+    }
+    await loadingPromise;
+  }
+}
+
+function findNearestHash(phash: bigint, threshold: number): HashCacheEntry | null {
+  let bestMatch: HashCacheEntry | null = null;
+  let bestDistance = threshold + 1;
+
+  for (const entry of hashCache) {
+    const dist = hammingDistance(phash, entry.phash);
+    if (dist < bestDistance) {
+      bestDistance = dist;
+      bestMatch = entry;
+    }
   }
 
-  return db.minithumbnail.create({
-    data: {
-      md5,
-      channelsFrom: {
-        create: { chatId: chat.id },
-      },
-    },
-    include: {
-      channelsFrom: true,
-    },
-  });
-};
+  return bestMatch;
+}
 
-export const addMinithumbnailSource = async (minithumbnailId: number, chatId: bigint) => {
-  const chat = await findChatByChatId(chatId);
-  if (!chat) {
-    throw new Error(`Chat not found: ${chatId}`);
+export async function checkAndTrackHash(
+  phash: bigint,
+  chatDbId: number,
+  threshold: number,
+): Promise<{ isNew: boolean; sourceCount: number }> {
+  await ensureCacheLoaded();
+
+  const match = findNearestHash(phash, threshold);
+
+  if (!match) {
+    const created = await db.minithumbnail.create({
+      data: { phash },
+    });
+    await db.minithumbnailSource.create({
+      data: { minithumbnailId: created.id, chatId: chatDbId },
+    });
+    hashCache.push({ id: created.id, phash, sourceCount: 1 });
+    if (hashCache.length >= MAX_CACHE_SIZE) {
+      console.warn(`[phash] Hash cache size ${hashCache.length} exceeds ${MAX_CACHE_SIZE} — consider pruning`);
+    }
+    return { isNew: true, sourceCount: 1 };
   }
 
-  // upsert чтобы не дублировать связь
-  return db.minithumbnailSource.upsert({
-    where: {
-      minithumbnailId_chatId: {
-        minithumbnailId,
-        chatId: chat.id,
-      },
-    },
-    update: {},
-    create: {
-      minithumbnailId,
-      chatId: chat.id,
-    },
+  const alreadyTracked = await db.minithumbnailSource.findUnique({
+    where: { minithumbnailId_chatId: { minithumbnailId: match.id, chatId: chatDbId } },
   });
-};
 
-// ============ COMBINED LOGIC ============
-
-/**
- * Проверяет minithumbnail: новый или дубликат
- */
-export const checkAndTrackMinithumbnail = async (md5: string, chatId: bigint) => {
-  const existing = await findMinithumbnailByMd5(md5);
-
-  if (!existing) {
-    const created = await createMinithumbnail(md5, chatId);
-    return { isNew: true, minithumbnail: created };
+  if (!alreadyTracked) {
+    await db.minithumbnailSource.create({
+      data: { minithumbnailId: match.id, chatId: chatDbId },
+    });
+    match.sourceCount += 1;
   }
 
-  await addMinithumbnailSource(existing.id, chatId);
-  return { isNew: false, minithumbnail: existing };
-};
+  return { isNew: false, sourceCount: match.sourceCount };
+}
