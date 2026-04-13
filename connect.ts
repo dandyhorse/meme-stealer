@@ -1,6 +1,6 @@
 import * as readline from 'readline';
 
-import { tgClient } from '@config';
+import { tgClient } from '@config/clients';
 
 export const connect = async () => {
   const rl = readline.createInterface({

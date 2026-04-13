@@ -1,25 +1,26 @@
 import axios from 'axios';
 
-import { BaseLogDto, FinishLogDto, LogDto, LogLevel } from './common/dtos';
+import { BaseLogDto, LogDto, LogLevel } from './common/dtos';
 
 const makeRed = (message: string) => `\x1b[31m${message}\x1b[0m`;
 const makeGreen = (message: string) => `\x1b[32m${message}\x1b[0m`;
 const makeYellow = (message: string) => `\x1b[33m${message}\x1b[0m`;
+const makeCyan = (message: string) => `\x1b[36m${message}\x1b[0m`;
+const makeDim = (message: string) => `\x1b[90m${message}\x1b[0m`;
+
+const dtf = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: 'Europe/Moscow',
+  year: '2-digit',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
 
 const formatTS = (timestamp: number) =>
-  Intl.DateTimeFormat('ru-RU', {
-    timeZone: 'Europe/Moscow',
-    year: '2-digit',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  })
-    .format(new Date(timestamp))
-    .replace(/\//g, '.')
-    .replace(',', '');
+  dtf.format(new Date(timestamp)).replace(/\//g, '.').replace(',', '');
 
 const makePrefix = ({ timestamp, level, path, statusCode, message }: BaseLogDto) => {
   const prefix = `[${formatTS(timestamp)}] [${level.toUpperCase()}]`;
@@ -54,7 +55,7 @@ const prepareDetails = (details?: unknown) => {
     }
     // Если details — объект с полем error (axios или другой)
     else if (typeof details === 'object' && details !== null && 'error' in details) {
-      const detailsObj = details as Record<string, unknown>;
+      const detailsObj = { ...details as Record<string, unknown> };
 
       if (axios.isAxiosError(detailsObj.error)) {
         const error = detailsObj.error;
@@ -85,9 +86,13 @@ const log = ({ level, module, message, details }: LogDto) => {
 
   switch (level) {
     case LogLevel.INFO:
+      logMessage = makeCyan(logMessage);
+      break;
     case LogLevel.WARN:
-    case LogLevel.DEBUG:
       logMessage = makeYellow(logMessage);
+      break;
+    case LogLevel.DEBUG:
+      logMessage = makeDim(logMessage);
       break;
     case LogLevel.LOG:
       logMessage = makeGreen(logMessage);
@@ -100,38 +105,6 @@ const log = ({ level, module, message, details }: LogDto) => {
   console[level](logMessage);
 };
 
-const finishLog = ({ res, req, error }: FinishLogDto) => {
-  const level: LogLevel = error ? LogLevel.ERROR : LogLevel.LOG;
-
-  const baseUrl = req.baseUrl !== undefined ? req.baseUrl : '';
-  const reqPath = req.path !== '/' ? req.path : '';
-  const path = baseUrl + reqPath;
-
-  const prefix = makePrefix({
-    timestamp: req.startTime,
-    level,
-    path,
-    statusCode: res.statusCode,
-  });
-
-  const details = ` ${JSON.stringify({
-    requestTime: (Date.now() - req.startTime) / 1000,
-    body: req?.body,
-    error,
-  })}`;
-
-  let message = prefix + details;
-
-  if (error) {
-    message = makeRed(message);
-  } else {
-    message = makeGreen(message);
-  }
-
-  console[level](message);
-};
-
 export const systemLogger = {
-  finishLog,
   log,
 };

@@ -22,7 +22,10 @@
     "baseUrl": "./",
     "paths": {
       "@config": [
-        "./src/utils/config.ts"
+        "./src/config/env"
+      ],
+      "@config/*": [
+        "./src/config/*"
       ]
     },
   },

@@ -1,18 +1,8 @@
-import { Response } from 'express';
-
-import { RequestExt } from '../interfaces';
-
 export interface LogDto {
   level: LogLevel;
   module: string;
   message: string;
-  details?: any;
-}
-
-export interface FinishLogDto {
-  req: RequestExt;
-  res: Response;
-  error?: any;
+  details?: unknown;
 }
 
 export interface BaseLogDto {
