@@ -18,6 +18,12 @@ export interface BotCommand {
   handler: (args: string[], ctx?: Context) => Promise<string>;
 }
 
+const isAlreadyParticipantError = (error: unknown): boolean => {
+  const text = error instanceof Error ? error.message : String(error);
+
+  return text.includes('USER_ALREADY_PARTICIPANT');
+};
+
 export const listChannelsCommand: BotCommand = {
   name: '/channels',
   description: 'Показать каналы в полинге (id + title)',
@@ -56,7 +62,8 @@ export const addChannelCommand: BotCommand = {
         message: `[add] resolveChannelId start: ${input}`,
       });
 
-      const { id, title } = await resolveChannelId(input);
+      const resolved = await resolveChannelId(input, { joinInvite: true });
+      const { id, title } = resolved;
 
       systemLogger.log({
         level: LogLevel.LOG,
@@ -68,19 +75,27 @@ export const addChannelCommand: BotCommand = {
         return `Канал в бан-листе: ${title} (<code>${id}</code>). Сначала /unban`;
       }
 
-      systemLogger.log({
-        level: LogLevel.LOG,
-        module: 'BOT_COMMANDS',
-        message: `[add] JoinChannel start: ${id}`,
-      });
+      if (resolved.needsJoin) {
+        systemLogger.log({
+          level: LogLevel.LOG,
+          module: 'BOT_COMMANDS',
+          message: `[add] JoinChannel start: ${id}`,
+        });
 
-      await tgClient.invoke(new Api.channels.JoinChannel({ channel: id }));
+        try {
+          await tgClient.invoke(new Api.channels.JoinChannel({ channel: resolved.entity || id }));
+        } catch (error) {
+          if (!isAlreadyParticipantError(error)) {
+            throw error;
+          }
+        }
 
-      systemLogger.log({
-        level: LogLevel.LOG,
-        module: 'BOT_COMMANDS',
-        message: `[add] JoinChannel done, creating DB record`,
-      });
+        systemLogger.log({
+          level: LogLevel.LOG,
+          module: 'BOT_COMMANDS',
+          message: `[add] JoinChannel done, creating DB record`,
+        });
+      }
 
       const { reactivated } = await addChannel(BigInt(id), title);
 

@@ -1,11 +1,9 @@
-import { tgClient, initProxy } from '@config';
+import { tgClient, initProxy, proxyChatId } from '@config';
 
 import { db } from '../../prisma/client';
 import { LogLevel } from '../utils/common/dtos';
 import { HAMMING_THRESHOLD } from '../utils/phash';
 import { systemLogger } from '../utils/system-logger';
-
-const PROXY_CHAT_ID = -1003518762032;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -43,8 +41,8 @@ const cleanup = async () => {
     JOIN content_hash_sources s1 ON s1."contentHashId" = h1.id
     JOIN content_hash_sources s2 ON s2."contentHashId" = h2.id
     WHERE hamming_distance(h1.phash, h2.phash) <= ${HAMMING_THRESHOLD}
-      AND s1."sourceChatId" = ${BigInt(PROXY_CHAT_ID)}
-      AND s2."sourceChatId" = ${BigInt(PROXY_CHAT_ID)}
+      AND s1."sourceChatId" = ${BigInt(proxyChatId)}
+      AND s2."sourceChatId" = ${BigInt(proxyChatId)}
     ORDER BY s1."messageId" ASC
   `;
 
@@ -109,7 +107,7 @@ const cleanup = async () => {
     const batch = msgIds.slice(i, i + BATCH_SIZE);
 
     try {
-      await tgClient.deleteMessages(String(PROXY_CHAT_ID), batch, { revoke: true });
+      await tgClient.deleteMessages(String(proxyChatId), batch, { revoke: true });
       deleted += batch.length;
 
       systemLogger.log({
