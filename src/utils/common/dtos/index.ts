@@ -1,1 +1,1 @@
-export { LogDto, FinishLogDto, BaseLogDto, LogLevel } from './logger-dtos';
+export { LogDto, LogLevel } from './logger-dtos';

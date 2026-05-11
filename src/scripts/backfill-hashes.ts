@@ -1,12 +1,10 @@
-import { tgClient, initProxy } from '@config';
+import { tgClient, initProxy, proxyChatId } from '@config';
 
 import { db } from '../../prisma/client';
 import { upsertChat, findChatByChatId } from '../modules/db';
 import { LogLevel } from '../utils/common/dtos';
 import { safeComputeHash } from '../utils/phash';
 import { systemLogger } from '../utils/system-logger';
-
-const PROXY_CHAT_ID = -1003518762032;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -25,12 +23,12 @@ const parseArgs = () => {
 
 const backfill = async () => {
   const { offsetId } = parseArgs();
-  const proxyChatId = BigInt(PROXY_CHAT_ID);
+  const proxyChatDbId = BigInt(proxyChatId);
 
   systemLogger.log({
     level: LogLevel.INFO,
     module: 'BACKFILL',
-    message: `Запуск backfill для PROXY_CHAT ${PROXY_CHAT_ID}${offsetId ? ` с offsetId=${offsetId}` : ''}`,
+    message: `Запуск backfill для PROXY_CHAT ${proxyChatId}${offsetId ? ` с offsetId=${offsetId}` : ''}`,
   });
 
   await initProxy();
@@ -38,8 +36,8 @@ const backfill = async () => {
   await tgClient.getDialogs();
 
   // Register PROXY_CHAT in chats (isActive=false — не попадёт в polling)
-  await upsertChat(proxyChatId, 'PROXY_CHAT', false);
-  const chat = await findChatByChatId(proxyChatId);
+  await upsertChat(proxyChatDbId, 'PROXY_CHAT', false);
+  const chat = await findChatByChatId(proxyChatDbId);
   if (!chat) throw new Error('Failed to find/create PROXY_CHAT in chats');
 
   systemLogger.log({
@@ -63,7 +61,7 @@ const backfill = async () => {
   }
 
   try {
-    for await (const message of tgClient.iterMessages(String(PROXY_CHAT_ID), iterParams)) {
+    for await (const message of tgClient.iterMessages(String(proxyChatId), iterParams)) {
       processed++;
       lastMsgId = message.id;
 
@@ -92,7 +90,7 @@ const backfill = async () => {
           contentHashId: contentHash.id,
           chatId: chat.id,
           messageId: message.id,
-          sourceChatId: proxyChatId,
+          sourceChatId: proxyChatDbId,
         },
       });
 

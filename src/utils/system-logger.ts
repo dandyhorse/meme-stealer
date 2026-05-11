@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-import { BaseLogDto, FinishLogDto, LogDto, LogLevel } from './common/dtos';
+import { LogDto, LogLevel } from './common/dtos';
 
 const makeRed = (message: string) => `\x1b[31m${message}\x1b[0m`;
 const makeGreen = (message: string) => `\x1b[32m${message}\x1b[0m`;
@@ -21,13 +21,22 @@ const formatTS = (timestamp: number) =>
     .replace(/\//g, '.')
     .replace(',', '');
 
-const makePrefix = ({ timestamp, level, path, statusCode, message }: BaseLogDto) => {
+const makePrefix = ({
+  timestamp,
+  level,
+  path,
+  message,
+}: {
+  timestamp: number;
+  level: LogLevel;
+  path?: string;
+  message?: string;
+}) => {
   const prefix = `[${formatTS(timestamp)}] [${level.toUpperCase()}]`;
 
   const additional: string[] = [];
 
   path ? additional.push(`[${path}]`) : null;
-  statusCode ? additional.push(`(${statusCode.toString()})`) : null;
   message ? additional.push(message) : null;
 
   return additional.length > 0 ? `${prefix}: ${additional.join(' ')}` : `${prefix}:`;
@@ -100,38 +109,6 @@ const log = ({ level, module, message, details }: LogDto) => {
   console[level](logMessage);
 };
 
-const finishLog = ({ res, req, error }: FinishLogDto) => {
-  const level: LogLevel = error ? LogLevel.ERROR : LogLevel.LOG;
-
-  const baseUrl = req.baseUrl !== undefined ? req.baseUrl : '';
-  const reqPath = req.path !== '/' ? req.path : '';
-  const path = baseUrl + reqPath;
-
-  const prefix = makePrefix({
-    timestamp: req.startTime,
-    level,
-    path,
-    statusCode: res.statusCode,
-  });
-
-  const details = ` ${JSON.stringify({
-    requestTime: (Date.now() - req.startTime) / 1000,
-    body: req?.body,
-    error,
-  })}`;
-
-  let message = prefix + details;
-
-  if (error) {
-    message = makeRed(message);
-  } else {
-    message = makeGreen(message);
-  }
-
-  console[level](message);
-};
-
 export const systemLogger = {
-  finishLog,
   log,
 };
